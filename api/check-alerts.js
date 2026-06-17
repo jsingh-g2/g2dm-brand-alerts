@@ -4,14 +4,14 @@ const http = require("http");
 const SLACK_WEBHOOK = process.env.SLACK_WEBHOOK_URL;
 
 const FEEDS = [
-  { name: "Shortlist",       url: "https://www.google.com/alerts/feeds/05794880774342406386/3778807884745421878" },
-  { name: "Jaipal Singh",    url: "https://www.google.com/alerts/feeds/05794880774342406386/224840658207423743" },
-  { name: "David Jani",      url: "https://www.google.com/alerts/feeds/05794880774342406386/16907128923538642082" },
-  { name: "ines Bahr",       url: "https://www.google.com/alerts/feeds/05794880774342406386/16185658615866520749" },
-  { name: "andrew blair",    url: "https://www.google.com/alerts/feeds/05794880774342406386/16907128923538644034" },
-  { name: "GetApp",          url: "https://www.google.com/alerts/feeds/05794880774342406386/9766896802491772037" },
-  { name: "Software Advice", url: "https://www.google.com/alerts/feeds/05794880774342406386/542332304367136774" },
-  { name: "Capterra",        url: "https://www.google.com/alerts/feeds/05794880774342406386/542332304367138522" },
+  { name: "Shortlist",       emoji: "📋", url: "https://www.google.com/alerts/feeds/05794880774342406386/3778807884745421878" },
+  { name: "Jaipal Singh",    emoji: "👤", url: "https://www.google.com/alerts/feeds/05794880774342406386/224840658207423743" },
+  { name: "David Jani",      emoji: "👤", url: "https://www.google.com/alerts/feeds/05794880774342406386/16907128923538642082" },
+  { name: "ines Bahr",       emoji: "👤", url: "https://www.google.com/alerts/feeds/05794880774342406386/16185658615866520749" },
+  { name: "andrew blair",    emoji: "👤", url: "https://www.google.com/alerts/feeds/05794880774342406386/16907128923538644034" },
+  { name: "GetApp",          emoji: "🏆", url: "https://www.google.com/alerts/feeds/05794880774342406386/9766896802491772037" },
+  { name: "Software Advice", emoji: "🏆", url: "https://www.google.com/alerts/feeds/05794880774342406386/542332304367136774" },
+  { name: "Capterra",        emoji: "🏆", url: "https://www.google.com/alerts/feeds/05794880774342406386/542332304367138522" },
 ];
 
 function fetchUrl(url) {
@@ -25,6 +25,43 @@ function fetchUrl(url) {
   });
 }
 
+// Extract the real URL from Google's redirect wrapper
+function extractRealUrl(href) {
+  try {
+    const match = href.match(/[?&]url=([^&]+)/);
+    if (match) return decodeURIComponent(match[1]);
+    return href;
+  } catch {
+    return href;
+  }
+}
+
+// Extract domain from URL for source display
+function extractDomain(url) {
+  try {
+    const domain = new URL(url).hostname.replace("www.", "");
+    return domain;
+  } catch {
+    return "unknown source";
+  }
+}
+
+// Clean HTML tags and entities from text
+function cleanText(text) {
+  return text
+    .replace(/<b>/gi, "*").replace(/<\/b>/gi, "*")  // bold → Slack bold
+    .replace(/<[^>]+>/g, "")                          // remove other HTML tags
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&middot;/g, "·")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function parseEntries(xml) {
   const entries = [];
   const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
@@ -32,15 +69,30 @@ function parseEntries(xml) {
   while ((match = entryRegex.exec(xml)) !== null) {
     const block = match[1];
     const id      = (block.match(/<id>([^<]+)<\/id>/) || [])[1] || "";
-    const title   = (block.match(/<title[^>]*>([^<]+)<\/title>/) || [])[1] || "No title";
+    const rawTitle = (block.match(/<title[^>]*>([\s\S]*?)<\/title>/) || [])[1] || "No title";
     const href    = (block.match(/href="([^"]+)"/) || [])[1] || "";
     const pub     = (block.match(/<published>([^<]+)<\/published>/) || [])[1] || "";
-    const content = (block.match(/<content[^>]*>([\s\S]*?)<\/content>/) || [])[1] || "";
-    const cleanTitle = title.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
-    const cleanContent = content.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").trim().slice(0, 200);
-    entries.push({ id, title: cleanTitle, href, pub, content: cleanContent });
+    const rawContent = (block.match(/<content[^>]*>([\s\S]*?)<\/content>/) || [])[1] || "";
+
+    const title = cleanText(rawTitle);
+    const content = cleanText(rawContent).slice(0, 180);
+    const realUrl = extractRealUrl(href);
+    const source = extractDomain(realUrl);
+
+    entries.push({ id, title, href: realUrl, pub, content, source });
   }
   return entries;
+}
+
+function formatDate(pubStr) {
+  try {
+    return new Date(pubStr).toLocaleString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+      hour: "2-digit", minute: "2-digit", timeZoneName: "short"
+    });
+  } catch {
+    return pubStr;
+  }
 }
 
 function postToSlack(feed, entry) {
@@ -51,19 +103,22 @@ function postToSlack(feed, entry) {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `🔔 *Google Alert: ${feed.name}*\n*<${entry.href}|${entry.title}>*`,
+            text: `${feed.emoji} *<${entry.href}|${entry.title}>*`,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: entry.content ? `_${entry.content}_` : "_No preview available_",
           },
         },
         {
           type: "context",
           elements: [
-            { type: "mrkdwn", text: entry.content || "_No preview available_" },
-          ],
-        },
-        {
-          type: "context",
-          elements: [
-            { type: "mrkdwn", text: `📅 ${new Date(entry.pub).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}` },
+            { type: "mrkdwn", text: `🔍 *${feed.name}*` },
+            { type: "mrkdwn", text: `🌐 ${entry.source}` },
+            { type: "mrkdwn", text: `📅 ${formatDate(entry.pub)}` },
           ],
         },
         { type: "divider" },
@@ -92,20 +147,36 @@ function postToSlack(feed, entry) {
   });
 }
 
-async function postSummaryHeader(totalNew) {
+async function postDailySummary(results) {
   return new Promise((resolve, reject) => {
-    const now = new Date().toLocaleString("en-US", { dateStyle: "long", timeStyle: "short" });
+    const now = new Date().toLocaleString("en-US", {
+      weekday: "long", month: "long", day: "numeric", year: "numeric"
+    });
+    const totalNew = results.reduce((sum, r) => sum + (r.count || 0), 0);
+
+    const feedLines = results.map(r =>
+      r.error
+        ? `• ${r.emoji} ${r.feed}: ⚠️ error`
+        : `• ${r.emoji} *${r.feed}*: ${r.count} result${r.count !== 1 ? "s" : ""}`
+    ).join("\n");
+
     const payload = JSON.stringify({
       blocks: [
         {
           type: "header",
-          text: { type: "plain_text", text: "📡 G2DM Daily Brand Alert Summary" },
+          text: { type: "plain_text", text: "📡 G2DM Daily Brand Alert Report" },
         },
         {
-          type: "context",
-          elements: [
-            { type: "mrkdwn", text: `🗓 ${now} • ${totalNew} new result${totalNew !== 1 ? "s" : ""} found across all keywords` },
-          ],
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*${now}*\n${totalNew} new mention${totalNew !== 1 ? "s" : ""} found across all keywords`,
+          },
+        },
+        { type: "divider" },
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: feedLines },
         },
         { type: "divider" },
       ],
@@ -141,34 +212,32 @@ async function main() {
   console.log(`\n🚀 G2DM Brand Alert Check — ${new Date().toLocaleString()}`);
   console.log("=".repeat(50));
 
-  let totalNew = 0;
   const results = [];
 
+  // Post summary header first
   for (const feed of FEEDS) {
     try {
       const xml = await fetchUrl(feed.url);
       const entries = parseEntries(xml);
       console.log(`[${feed.name}] ${entries.length} entries found`);
-      results.push({ feed: feed.name, count: entries.length });
-      totalNew += entries.length;
+      results.push({ feed: feed.name, emoji: feed.emoji, count: entries.length });
 
       for (const entry of entries) {
         await postToSlack(feed, entry);
-        console.log(`  ✓ Sent: ${entry.title.slice(0, 60)}...`);
+        console.log(`  ✓ Sent: ${entry.title.slice(0, 60)}`);
         await new Promise((r) => setTimeout(r, 300));
       }
     } catch (err) {
       console.error(`[${feed.name}] ❌ Error: ${err.message}`);
-      results.push({ feed: feed.name, error: err.message });
+      results.push({ feed: feed.name, emoji: feed.emoji, error: err.message });
     }
   }
 
-  if (totalNew > 0) {
-    await postSummaryHeader(totalNew);
-    console.log(`\n✅ Done! Sent ${totalNew} alerts to Slack.`);
-  } else {
-    console.log("\n✅ Done! No new alerts today.");
-  }
+  // Post daily summary at the end
+  await postDailySummary(results);
+
+  const total = results.reduce((sum, r) => sum + (r.count || 0), 0);
+  console.log(`\n✅ Done! ${total} alerts sent to Slack.`);
 }
 
 main();
