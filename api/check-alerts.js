@@ -132,40 +132,43 @@ async function postSummaryHeader(totalNew) {
   });
 }
 
-module.exports = async (req, res) => {
-  // Secure the endpoint so only Vercel cron can call it
-  const authHeader = req.headers["authorization"];
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
+async function main() {
   if (!SLACK_WEBHOOK) {
-    return res.status(500).json({ error: "SLACK_WEBHOOK_URL not set" });
+    console.error("❌ SLACK_WEBHOOK_URL environment variable not set");
+    process.exit(1);
   }
 
-  const results = [];
+  console.log(`\n🚀 G2DM Brand Alert Check — ${new Date().toLocaleString()}`);
+  console.log("=".repeat(50));
+
   let totalNew = 0;
+  const results = [];
 
   for (const feed of FEEDS) {
     try {
       const xml = await fetchUrl(feed.url);
       const entries = parseEntries(xml);
+      console.log(`[${feed.name}] ${entries.length} entries found`);
       results.push({ feed: feed.name, count: entries.length });
       totalNew += entries.length;
 
       for (const entry of entries) {
         await postToSlack(feed, entry);
+        console.log(`  ✓ Sent: ${entry.title.slice(0, 60)}...`);
         await new Promise((r) => setTimeout(r, 300));
       }
     } catch (err) {
+      console.error(`[${feed.name}] ❌ Error: ${err.message}`);
       results.push({ feed: feed.name, error: err.message });
     }
   }
 
   if (totalNew > 0) {
     await postSummaryHeader(totalNew);
+    console.log(`\n✅ Done! Sent ${totalNew} alerts to Slack.`);
+  } else {
+    console.log("\n✅ Done! No new alerts today.");
   }
+}
 
-  return res.status(200).json({ success: true, checked: results, totalNew });
-};
-
+main();
