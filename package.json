@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "Daily Google Alerts → Slack for G2DM brand monitoring",
   "engines": {
-    "node": "18.x"
+    "node": "20.x"
   }
 }
